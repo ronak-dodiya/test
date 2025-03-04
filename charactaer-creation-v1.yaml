@@ -1,0 +1,83 @@
+version: 1
+kind: workflow
+metadata:
+  name: character-image-generation
+spec:
+  steps:
+    - name: load-model
+      image: paperspace/gradient-diffusers
+      script: |
+        from comfyui import CheckpointLoaderSimple
+        model = CheckpointLoaderSimple.load('wildcardxXLTURBO_wildcardxXLTURBOV10.safetensors')
+        model.save('/storage/model.pkl')
+      outputs:
+        - name: model
+          path: /storage/model.pkl
+
+    - name: encode-text
+      image: paperspace/gradient-diffusers
+      script: |
+        from comfyui import CLIPTextEncode
+        import pickle
+        model = pickle.load(open('/storage/model.pkl', 'rb'))
+        prompt = "((masterpiece, best quality)), Hair: long, intricate black braids..."
+        encoding = CLIPTextEncode.encode(model, prompt)
+        with open('/storage/encoding.pkl', 'wb') as f:
+            pickle.dump(encoding, f)
+      dependencies:
+        - load-model
+      outputs:
+        - name: encoding
+          path: /storage/encoding.pkl
+
+    - name: generate-latent
+      image: paperspace/gradient-diffusers
+      script: |
+        from comfyui import KSampler
+        import pickle
+        model = pickle.load(open('/storage/model.pkl', 'rb'))
+        encoding = pickle.load(open('/storage/encoding.pkl', 'rb'))
+        latent = KSampler.sample(model, encoding)
+        with open('/storage/latent.pkl', 'wb') as f:
+            pickle.dump(latent, f)
+      dependencies:
+        - encode-text
+      outputs:
+        - name: latent
+          path: /storage/latent.pkl
+
+    - name: decode-image
+      image: paperspace/gradient-diffusers
+      script: |
+        from comfyui import VAEDecode
+        import pickle
+        latent = pickle.load(open('/storage/latent.pkl', 'rb'))
+        image = VAEDecode.decode(latent)
+        image.save('/storage/output.png')
+      dependencies:
+        - generate-latent
+      outputs:
+        - name: output-image
+          path: /storage/output.png
+
+    - name: upscale-image
+      image: paperspace/gradient-diffusers
+      script: |
+        from comfyui import UltimateSDUpscale
+        from PIL import Image
+        image = Image.open('/storage/output.png')
+        upscaled = UltimateSDUpscale.upscale(image, scale=2)
+        upscaled.save('/storage/upscaled.png')
+      dependencies:
+        - decode-image
+      outputs:
+        - name: upscaled-image
+          path: /storage/upscaled.png
+
+    - name: save-image
+      image: paperspace/python
+      script: |
+        from shutil import copyfile
+        copyfile('/storage/upscaled.png', '/outputs/final_output.png')
+      dependencies:
+        - upscale-image
